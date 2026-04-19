@@ -48,9 +48,14 @@ build/
 # Data (do not commit actual data)
 /data/corpus/
 /data/drive_sync/
+/services/api/data/corpus/
 
 # Secrets and local archives
 /secrets/
 /corpus.zip
 /__MACOSX/
+/infra/.env.backup
+/infra/nginx/ssl/*.pem
+/services/api/data/corpus/metadata/*.json
+/services/garmin/__pycache__/
 
