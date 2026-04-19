@@ -31,16 +31,18 @@ jobs:
 
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$SERVER_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$SERVER_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "$PORT" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
-          ssh -i ~/.ssh/deploy_key -p "$PORT" "$SERVER_USER@$SERVER_HOST" "APP_PATH='$APP_PATH' bash -s" <<'EOF'
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key -p "$PORT" "$SERVER_USER@$SERVER_HOST" "APP_PATH='$APP_PATH' bash -s" <<'EOF'
             set -euo pipefail
-            cd "$APP_PATH"
-            git fetch --all --prune
-            git reset --hard origin/main
-            if [ -f "infra/docker-compose.yml" ]; then
-              docker compose -f infra/docker-compose.yml up -d --build
+            if [ ! -d "$APP_PATH/.git" ]; then
+              echo "App path is not a git repository: $APP_PATH"
+              exit 1
+            fi
+            git -c safe.directory="$APP_PATH" -C "$APP_PATH" fetch --all --prune
+            git -c safe.directory="$APP_PATH" -C "$APP_PATH" reset --hard origin/main
+            if [ -f "$APP_PATH/infra/docker-compose.yml" ]; then
+              docker compose -f "$APP_PATH/infra/docker-compose.yml" up -d --build
             fi
           EOF
