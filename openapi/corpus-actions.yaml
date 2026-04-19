@@ -1,0 +1,251 @@
+openapi: 3.1.0
+info:
+  title: Corpus Assistant API
+  version: 1.0.0
+  description: Actions for the Corpus GPT assistant.
+servers:
+  - url: https://corpus.kurasika.tech/api/v1
+security:
+  - ApiKeyAuth: []
+paths:
+  /assistant/ping:
+    get:
+      summary: Check connectivity and API key (no data transfer)
+      operationId: getAssistantPing
+      responses:
+        '200':
+          description: API is reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                  ts:
+                    type: string
+  /assistant/context:
+    get:
+      summary: Fetch consolidated context for GPT
+      operationId: getAssistantContext
+      parameters:
+        - in: query
+          name: days
+          schema:
+            type: integer
+            default: 30
+          description: Lookback window in days (more days = more vitals, sleep, body metrics, activities)
+        - in: query
+          name: activityLimit
+          schema:
+            type: integer
+            default: 80
+          description: Max activities to include (more = richer activity history)
+      responses:
+        '200':
+          description: Context payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  generatedAt:
+                    type: string
+                  window:
+                    type: object
+                    properties:
+                      days:
+                        type: integer
+                      from:
+                        type: string
+                  todayBrief:
+                    type: object
+                    additionalProperties: true
+                  rollingSummary:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  vitals:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  sleep:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  bodyMetrics:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  bodyBattery:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  activities:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  recommendations:
+                    type: object
+                    additionalProperties: true
+                  medicalSummary:
+                    type: object
+                    additionalProperties: true
+  /assistant/sync:
+    post:
+      summary: Trigger the full sidebar sync flow
+      operationId: triggerAssistantSync
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                days:
+                  type: integer
+                  default: 30
+                  description: Days of intervals.icu data to sync (use 30 for snappy sync; increase only if user explicitly asks)
+                generateSummary:
+                  type: boolean
+                  default: false
+                  description: When true, also generates the daily medical summary (slower; may time out in ChatGPT Actions)
+      responses:
+        '200':
+          description: Sync results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  generatedAt:
+                    type: string
+                  results:
+                    type: object
+                    additionalProperties: true
+  /ask:
+    post:
+      summary: Ask a health/medical/fitness question and get a direct answer
+      operationId: ask
+      description: Uses Corpus data (bloods, activities, vitals, sleep, body metrics, DNA, medical records) to compute stats and return a natural-language answer. Use for kidney scores, avg HR, toughest TSS, max CK, DNA results, train today, weight trend.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: The user's question about health, medical, or fitness data
+                dateRange:
+                  type: object
+                  properties:
+                    from:
+                      type: string
+                      description: Start date YYYY-MM-DD
+                    to:
+                      type: string
+                      description: End date YYYY-MM-DD
+                activityId:
+                  type: string
+                  description: Optional specific activity ID to focus on
+                days:
+                  type: integer
+                  default: 60
+                  description: Lookback window in days (more = more data for answers)
+                activityLimit:
+                  type: integer
+                  default: 100
+                  description: Max activities to include in context
+      responses:
+        '200':
+          description: Answer from Corpus data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  question:
+                    type: string
+                  answer:
+                    type: string
+                    description: Natural-language answer
+  /medicals/summary/payload:
+    get:
+      summary: Get the full OpenAI payload used for medical summary generation
+      operationId: getMedicalSummaryPayload
+      parameters:
+        - in: query
+          name: date
+          schema:
+            type: string
+          description: Date in YYYY-MM-DD format
+        - in: query
+          name: refresh
+          schema:
+            type: boolean
+            default: false
+          description: Regenerate payload before returning
+        - in: query
+          name: compact
+          schema:
+            type: boolean
+            default: true
+          description: Return compact summary only (when true)
+        - in: query
+          name: raw
+          schema:
+            type: boolean
+            default: false
+          description: Return raw payload JSON as-is (no compacting)
+        - in: query
+          name: maxChars
+          schema:
+            type: integer
+            default: 30000
+          description: Max total document chars for payload generation
+        - in: query
+          name: maxPerDoc
+          schema:
+            type: integer
+            default: 5000
+          description: Max chars per document for payload generation
+      responses:
+        '200':
+          description: Payload JSON
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  date:
+                    type: string
+                  createdAt:
+                    type: string
+                  payload:
+                    type: object
+                    additionalProperties: true
+                  fitnessMetrics:
+                    type: string
+                  assistantContext:
+                    type: object
+                    additionalProperties: true
+components:
+  schemas: {}
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-corpus-key

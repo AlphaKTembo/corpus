@@ -1,0 +1,72 @@
+# Mapping rules for CSV to canonical schema
+# This file should be placed at CORPUS_ROOT/metadata/mapping_rules.yml
+
+version: '1.0.0'
+
+sources:
+  trainingpeaks:
+    activities:
+      # Map CSV columns to canonical activities.parquet columns
+      activity_id:
+        column: 'Workout ID'
+        transform: 'string'
+      start_time_utc:
+        column: 'Workout Date'
+        transform: 'datetime'
+      sport:
+        column: 'Sport'
+        transform: 'string'
+      duration_s:
+        column: 'Duration'
+        transform: 'seconds'
+      distance_m:
+        column: 'Distance'
+        transform: 'meters'
+      tss:
+        column: 'TSS'
+        transform: 'number'
+      avg_hr_bpm:
+        column: 'Avg HR'
+        transform: 'number'
+      max_hr_bpm:
+        column: 'Max HR'
+        transform: 'number'
+      avg_power_w:
+        column: 'Avg Power'
+        transform: 'number'
+      np_watts:
+        column: 'NP'
+        transform: 'number'
+      if:
+        column: 'IF'
+        transform: 'number'
+      source:
+        value: 'trainingpeaks'
+      created_at_utc:
+        value: 'now'
+      updated_at_utc:
+        value: 'now'
+
+  garmin:
+    activities:
+      # Example Garmin mapping (adjust based on actual CSV structure)
+      activity_id:
+        column: 'Activity ID'
+        transform: 'string'
+      start_time_utc:
+        column: 'Date'
+        transform: 'datetime'
+      sport:
+        column: 'Activity Type'
+        transform: 'string'
+      duration_s:
+        column: 'Duration'
+        transform: 'seconds'
+      distance_m:
+        column: 'Distance'
+        transform: 'meters'
+      source:
+        value: 'garmin'
+
+# Unknown columns will be stored in extras JSON field or ignored
+

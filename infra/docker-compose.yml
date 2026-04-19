@@ -1,0 +1,162 @@
+# Docker Compose automatically reads .env file from this directory
+# Make sure .env file exists with FITNESSSYNCER_CLIENT_ID and FITNESSSYNCER_CLIENT_SECRET
+
+services:
+  api:
+    build:
+      context: ../services/api
+      dockerfile: Dockerfile
+    container_name: corpus-api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://corpus.kurasika.tech/api}
+      - CORPUS_ROOT=/data/corpus
+      - DB_PATH=/data/corpus/corpus.db
+      - DRIVE_SYNC_ROOT=/data/drive_sync/TrainingPeaks
+      - MEDICAL_DRIVE_SYNC_ROOT=/data/drive_sync/Medicals
+      # SINGLE_USER_USERNAME and SINGLE_USER_PASSWORD_HASH removed — now using DB-backed multi-user auth
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-change-me-refresh}
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_MAX_CONTEXT_CHARS=${OPENAI_MAX_CONTEXT_CHARS:-24000}
+      - MEDICAL_PAYLOAD_MAX_CHARS=${MEDICAL_PAYLOAD_MAX_CHARS:-200000}
+      - MEDICAL_PAYLOAD_MAX_CHARS_PER_DOC=${MEDICAL_PAYLOAD_MAX_CHARS_PER_DOC:-20000}
+      - ACTIONS_API_KEY=43abd0074296341f125f1c39d67832d3acfda9083d325fdee0343a27d7e54adc
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/run/secrets/mymedicalfolder-a93e050f3e2c.json}
+      - GOOGLE_DRIVE_MEDICAL_FOLDER_ID=${GOOGLE_DRIVE_MEDICAL_FOLDER_ID:-1O_6VLVHmgUvojjR2neZkcngI5ft_QTwu}
+      - MEDICALS_DRIVE_FOLDER_ID=${MEDICALS_DRIVE_FOLDER_ID:-}
+      - MEDICALS_DRIVE_BLOODS_FOLDER_ID=${MEDICALS_DRIVE_BLOODS_FOLDER_ID:-}
+      - MEDICALS_DRIVE_REPORTS_FOLDER_ID=${MEDICALS_DRIVE_REPORTS_FOLDER_ID:-}
+      - DROPBOX_ACCESS_TOKEN=${DROPBOX_ACCESS_TOKEN:-}
+      - DROPBOX_FOLDER_PATH=${DROPBOX_FOLDER_PATH:-}
+      # FitnessSyncer credentials - MUST be set in .env file in this directory (infra/.env)
+      - FITNESSSYNCER_CLIENT_ID=${FITNESSSYNCER_CLIENT_ID:-}
+      - FITNESSSYNCER_CLIENT_SECRET=${FITNESSSYNCER_CLIENT_SECRET:-}
+      - FITNESSSYNCER_REDIRECT_URI=${FITNESSSYNCER_REDIRECT_URI:-https://personal.fitnesssyncer.com/}
+      # Intervals.icu credentials - MUST be set in .env file in this directory (infra/.env)
+      - INTERVALS_ICU_API_KEY=${INTERVALS_ICU_API_KEY:-}
+      - INTERVALS_ICU_ATHLETE_ID=${INTERVALS_ICU_ATHLETE_ID:-}
+      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-}
+    volumes:
+      - corpus_data:/data/corpus
+      - drive_sync:/data/drive_sync
+      - ../secrets:/run/secrets:ro
+    restart: unless-stopped
+    networks:
+      - corpus-network
+
+  worker:
+    build:
+      context: ../services/worker
+      dockerfile: Dockerfile
+    container_name: corpus-worker
+    environment:
+      - CORPUS_ROOT=/data/corpus
+      - DRIVE_SYNC_ROOT=/data/drive_sync/TrainingPeaks
+      - MEDICAL_DRIVE_SYNC_ROOT=/data/drive_sync/Medicals
+      - MEDICALS_API_BASE_URL=${MEDICALS_API_BASE_URL:-http://api:3000}
+      - GOOGLE_DRIVE_MEDICAL_FOLDER_ID=${GOOGLE_DRIVE_MEDICAL_FOLDER_ID:-1O_6VLVHmgUvojjR2neZkcngI5ft_QTwu}
+      - GOOGLE_DRIVE_CLIENT_ID=${GOOGLE_DRIVE_CLIENT_ID:-}
+      - GOOGLE_DRIVE_CLIENT_SECRET=${GOOGLE_DRIVE_CLIENT_SECRET:-}
+      - GOOGLE_DRIVE_REDIRECT_URI=${GOOGLE_DRIVE_REDIRECT_URI:-http://localhost}
+      - GOOGLE_DRIVE_REFRESH_TOKEN=${GOOGLE_DRIVE_REFRESH_TOKEN:-}
+      - GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON=${GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON:-/run/secrets/mymedicalfolder-a93e050f3e2c.json}
+      - GOOGLE_DRIVE_PRUNE_MISSING=${GOOGLE_DRIVE_PRUNE_MISSING:-false}
+      # FitnessSyncer credentials - MUST be set in .env file in this directory (infra/.env)
+      - FITNESSSYNCER_CLIENT_ID=${FITNESSSYNCER_CLIENT_ID:-}
+      - FITNESSSYNCER_CLIENT_SECRET=${FITNESSSYNCER_CLIENT_SECRET:-}
+      - FITNESSSYNCER_REDIRECT_URI=${FITNESSSYNCER_REDIRECT_URI:-https://personal.fitnesssyncer.com/}
+    volumes:
+      - corpus_data:/data/corpus
+      - drive_sync:/data/drive_sync
+      - ../secrets:/run/secrets:ro
+    networks:
+      - corpus-network
+    # Worker runs on-demand via cron or API trigger
+    command: ["node", "dist/cli.js", "ingest", "--sync"]
+
+  web:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api}
+        - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+    container_name: corpus-web
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api}
+      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-}
+      - NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+      - NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+      - NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/dashboard
+      - NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/dashboard
+    restart: unless-stopped
+    networks:
+      - corpus-network
+
+  # garmin: REMOVED - using intervals.icu instead
+  # garmin:
+  #   build:
+  #     context: ../services/garmin
+  #     dockerfile: Dockerfile
+  #   container_name: corpus-garmin
+  #   ports:
+  #     - "5001:5000"
+  #   environment:
+  #     - PORT=5000
+  #     - GARMIN_EMAIL=${GARMIN_EMAIL:-}
+  #     - GARMIN_PASSWORD=${GARMIN_PASSWORD:-}
+  #     - GARMINTOKENS=${GARMINTOKENS:-/data/garmin_tokens}
+  #   restart: unless-stopped
+  #   volumes:
+  #     - garmin_tokens:/data/garmin_tokens
+  #   networks:
+  #     - corpus-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: corpus-nginx
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - web
+    restart: unless-stopped
+    networks:
+      - corpus-network
+
+volumes:
+  corpus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CORPUS_DATA_PATH:-/data/corpus}
+  drive_sync:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DRIVE_SYNC_PATH:-/data/drive_sync}
+  # garmin_tokens: REMOVED - using intervals.icu instead
+  # garmin_tokens:
+  #   driver: local
+
+networks:
+  corpus-network:
+    driver: bridge
+
