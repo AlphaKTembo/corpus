@@ -7,6 +7,7 @@ import { MedicalsService } from '../medicals/medicals.service';
 import { MetricsService, BodyMetrics, SleepDaily, VitalsDaily } from '../metrics/metrics.service';
 import { SummaryService } from '../summary/summary.service';
 import { UsersService } from '../users/users.service';
+import { anthropicErrorFields, anthropicUsage, recordAiUsage } from '../common/ai-usage';
 
 @Injectable()
 export class AskService {
@@ -862,7 +863,31 @@ export class AskService {
     };
   }
 
-  private async callAnthropicMessages(payload: {
+  /**
+   * Every chat/coach Anthropic call goes through here so usage and failures
+   * are recorded (see common/ai-usage.ts).
+   */
+  private async callAnthropicMessages(payload: Parameters<AskService['callAnthropicMessagesRaw']>[0]): Promise<any> {
+    const startedAt = Date.now();
+    const requestedModel = payload.runtimeProfile?.model || this.getAnthropicModel();
+    const corpusRoot = this.configService.get<string>('CORPUS_ROOT', '/data/corpus');
+    try {
+      const data = await this.callAnthropicMessagesRaw(payload);
+      recordAiUsage(corpusRoot, {
+        ok: true, feature: 'ask', model: data?.model || requestedModel,
+        ...anthropicUsage(data), ms: Date.now() - startedAt,
+      });
+      return data;
+    } catch (err) {
+      recordAiUsage(corpusRoot, {
+        ok: false, feature: 'ask', model: requestedModel,
+        ...anthropicErrorFields(err), ms: Date.now() - startedAt,
+      });
+      throw err;
+    }
+  }
+
+  private async callAnthropicMessagesRaw(payload: {
     system: string;
     messages: Array<{ role: 'user' | 'assistant'; content: any }>;
     tools?: any[];

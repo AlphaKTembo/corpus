@@ -33,7 +33,10 @@ export class UsersController {
       intervalsConnected: !!(user?.intervalsApiKey && user?.intervalsAthleteId),
       intervalsAthleteId: user?.intervalsAthleteId || null,
       hasApiKey: !!user?.apiKey,
-      apiKey: user?.apiKey || null,
+      // Keys are stored hashed; the plaintext is only returned once by
+      // POST me/api-key/generate.
+      apiKey: null,
+      apiKeyHint: user?.apiKeyHint || null,
     };
   }
 

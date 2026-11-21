@@ -17,6 +17,10 @@ export default function ConnectionsPage() {
   const [intervalsLastSync, setIntervalsLastSync] = useState<string | null>(null);
   // GPT API key state
   const [gptApiKey, setGptApiKey] = useState<string | null>(null);
+  // Keys are stored hashed server-side: the full key is only available right
+  // after generating it. Otherwise we only know that one exists and its last 4 chars.
+  const [hasGptKey, setHasGptKey] = useState(false);
+  const [gptKeyHint, setGptKeyHint] = useState<string | null>(null);
   const [gptKeyGenerating, setGptKeyGenerating] = useState(false);
   const [gptKeyCopied, setGptKeyCopied] = useState(false);
   const [gptKeyVisible, setGptKeyVisible] = useState(false);
@@ -35,6 +39,8 @@ export default function ConnectionsPage() {
       setIntervalsConnected(res.data?.intervalsConnected ?? false);
       setIntervalsAthleteId(res.data?.intervalsAthleteId ?? null);
       setGptApiKey(res.data?.apiKey ?? null);
+      setHasGptKey(!!res.data?.hasApiKey);
+      setGptKeyHint(res.data?.apiKeyHint ?? null);
     } finally {
       setLoading(false);
     }
@@ -46,6 +52,8 @@ export default function ConnectionsPage() {
     try {
       const res = await apiClient.generateApiKey();
       setGptApiKey(res.data.apiKey);
+      setHasGptKey(true);
+      setGptKeyHint(res.data.apiKey.slice(-4));
       setGptKeyVisible(true);
     } finally {
       setGptKeyGenerating(false);
@@ -294,6 +302,16 @@ export default function ConnectionsPage() {
               {gptKeyCopied ? '✓ Copied' : 'Copy'}
             </button>
           </div>
+        ) : hasGptKey ? (
+          <div style={{
+            background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: '12px',
+            padding: '0.75rem 1rem', fontSize: '14px', color: '#334155',
+          }}>
+            Key active{gptKeyHint ? <> · ending in <code style={{ fontFamily: 'monospace' }}>…{gptKeyHint}</code></> : null}
+            <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '0.35rem' }}>
+              For security, keys are only shown once. Regenerate to get a new key.
+            </div>
+          </div>
         ) : (
           <button style={btn('primary', gptKeyGenerating)} disabled={gptKeyGenerating} onClick={() => handleGenerateApiKey(false)}>
             {gptKeyGenerating ? 'Generating…' : 'Generate My Key'}
@@ -301,6 +319,12 @@ export default function ConnectionsPage() {
         )}
 
         {gptApiKey && (
+          <p style={{ color: '#b45309', fontSize: '12px', margin: '0.6rem 0 0' }}>
+            Copy this key now. It won&apos;t be shown again.
+          </p>
+        )}
+
+        {(gptApiKey || hasGptKey) && (
           <button type="button" onClick={() => handleGenerateApiKey(true)} disabled={gptKeyGenerating}
             style={{ marginTop: '0.75rem', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '12px', padding: 0 }}>
             {gptKeyGenerating ? 'Regenerating…' : '↺ Regenerate key'}

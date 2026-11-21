@@ -1,4 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { encryptedColumn } from '../common/secret-crypto';
 
 @Entity('users')
 export class User {
@@ -20,8 +21,13 @@ export class User {
   @Column({ default: true })
   isActive: boolean;
 
+  /** SHA-256 hash of the Corpus API key ("sha256:<hex>"); plaintext is never stored. */
   @Column({ nullable: true, unique: true })
   apiKey?: string;
+
+  /** Last 4 characters of the API key, for display. */
+  @Column({ nullable: true })
+  apiKeyHint?: string;
 
   @Column({ nullable: true, unique: true })
   clerkId?: string;
@@ -29,7 +35,8 @@ export class User {
   @Column({ nullable: true, unique: true })
   firebaseUid?: string;
 
-  @Column({ nullable: true })
+  /** intervals.icu API key, AES-256-GCM encrypted at rest. */
+  @Column({ nullable: true, transformer: encryptedColumn })
   intervalsApiKey?: string;
 
   @Column({ nullable: true })

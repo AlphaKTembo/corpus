@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -8,6 +8,7 @@ import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { User } from './user.entity';
 import { ConfigService } from '@nestjs/config';
+import { apiKeyHint, hashApiKey, isEncrypted, isHashedApiKey } from '../common/secret-crypto';
 
 export interface CreateUserDto {
   email: string;
@@ -16,8 +17,9 @@ export interface CreateUserDto {
 }
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   private readonly corpusRoot: string;
+  private readonly logger = new Logger(UsersService.name);
 
   constructor(
     @InjectRepository(User)
@@ -64,8 +66,39 @@ export class UsersService {
     });
   }
 
+  /**
+   * One-time migration at startup: hash any plaintext API keys and encrypt any
+   * plaintext intervals.icu keys (the column transformer encrypts on save).
+   */
+  async onModuleInit(): Promise<void> {
+    const users = await this.usersRepo.find();
+    let hashed = 0;
+    let encrypted = 0;
+    for (const user of users) {
+      if (user.apiKey && !isHashedApiKey(user.apiKey)) {
+        await this.usersRepo.update(user.id, {
+          apiKey: hashApiKey(user.apiKey),
+          apiKeyHint: apiKeyHint(user.apiKey),
+        });
+        hashed++;
+      }
+      const raw = await this.usersRepo.query('SELECT intervalsApiKey FROM users WHERE id = ?', [user.id]);
+      const stored = raw?.[0]?.intervalsApiKey;
+      if (stored && !isEncrypted(stored) && process.env.CORPUS_ENCRYPTION_KEY) {
+        // user.intervalsApiKey is the plaintext here; update() re-encrypts it.
+        await this.usersRepo.update(user.id, { intervalsApiKey: user.intervalsApiKey });
+        encrypted++;
+      }
+    }
+    if (hashed || encrypted) {
+      this.logger.log(`Secret migration: hashed ${hashed} API key(s), encrypted ${encrypted} intervals key(s).`);
+    }
+  }
+
   async findByApiKey(apiKey: string): Promise<User | null> {
-    return this.usersRepo.findOne({ where: { apiKey } });
+    const raw = apiKey?.trim();
+    if (!raw) return null;
+    return this.usersRepo.findOne({ where: { apiKey: hashApiKey(raw) } });
   }
 
   /**
@@ -88,7 +121,7 @@ export class UsersService {
   }
 
   async setApiKey(userId: string, apiKey: string): Promise<void> {
-    await this.usersRepo.update(userId, { apiKey });
+    await this.usersRepo.update(userId, { apiKey: hashApiKey(apiKey), apiKeyHint: apiKeyHint(apiKey) });
   }
 
   /** Generate (or regenerate) a short, friendly API key for a user and persist it. */
@@ -98,7 +131,8 @@ export class UsersService {
     const rand = crypto.randomBytes(24);
     let token = 'cp_';
     for (let i = 0; i < 24; i++) token += chars[rand[i] % chars.length];
-    await this.usersRepo.update(userId, { apiKey: token });
+    await this.usersRepo.update(userId, { apiKey: hashApiKey(token), apiKeyHint: apiKeyHint(token) });
+    // Only the hash is stored; this is the one time the plaintext is available.
     return token;
   }
 

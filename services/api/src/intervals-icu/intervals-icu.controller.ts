@@ -169,6 +169,7 @@ export class IntervalsIcuController {
   }
 
   @Post('probe')
+  @UseGuards(JwtAuthGuard)
   async probeEndpoint(@Body() dto: IntervalsProbeDto) {
     const apiKey = dto.apiKey?.trim();
     const athleteId = dto.athleteId?.trim();

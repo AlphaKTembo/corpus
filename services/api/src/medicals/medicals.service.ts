@@ -10,6 +10,7 @@ import type { drive_v3 } from 'googleapis';
 import { ActivitiesService } from '../activities/activities.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { SummaryService } from '../summary/summary.service';
+import { anthropicErrorFields, anthropicUsage, recordAiUsage } from '../common/ai-usage';
 import {
   BloodCategory,
   BloodResult,
@@ -631,12 +632,30 @@ export class MedicalsService {
       .trim();
   }
 
-  private async callAnthropicForText(params: {
+  private async callAnthropicForText(params: Parameters<MedicalsService['callAnthropicForTextRaw']>[0]): Promise<string> {
+    const startedAt = Date.now();
+    try {
+      const { text, data } = await this.callAnthropicForTextRaw(params);
+      recordAiUsage(this.corpusRoot, {
+        ok: true, feature: 'medicals', model: data?.model || this.getAnthropicModel(),
+        ...anthropicUsage(data), ms: Date.now() - startedAt,
+      });
+      return text;
+    } catch (err) {
+      recordAiUsage(this.corpusRoot, {
+        ok: false, feature: 'medicals', model: this.getAnthropicModel(),
+        ...anthropicErrorFields(err), ms: Date.now() - startedAt,
+      });
+      throw err;
+    }
+  }
+
+  private async callAnthropicForTextRaw(params: {
     system: string;
     user: string;
     fallback?: string;
     maxTokens?: number;
-  }): Promise<string> {
+  }): Promise<{ text: string; data: any }> {
     const maxTokens = params.maxTokens && params.maxTokens > 0
       ? Math.min(params.maxTokens, this.getAnthropicMaxTokens())
       : this.getAnthropicMaxTokens();
@@ -661,7 +680,7 @@ export class MedicalsService {
     }
     const data = await response.json();
     const text = this.extractAnthropicText((data as any).content);
-    return text || params.fallback || 'No response.';
+    return { text: text || params.fallback || 'No response.', data };
   }
 
   async askMedicals(dto: MedicalAskRequest, userId = 'default'): Promise<MedicalAskResponse> {
