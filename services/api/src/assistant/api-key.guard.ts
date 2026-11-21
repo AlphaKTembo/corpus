@@ -8,7 +8,7 @@ import { UsersService } from '../users/users.service';
  *   1. x-corpus-key header        (internal web app / direct API calls)
  *   2. ?key= query parameter      (ChatGPT GPT Actions — GET requests)
  *   3. body.key field             (ChatGPT GPT Actions — POST requests)
- *   4. Authorization: Bearer JWT  (Clerk-authenticated web app)
+ *   4. Authorization: Bearer JWT  (Firebase-authenticated web app)
  *
  * Always sets request.user = { id, username, email } on success.
  */
@@ -39,7 +39,7 @@ export class ApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('Invalid API key.');
     }
 
-    // --- Path 2: Authorization: Bearer <Clerk JWT> via Passport ---
+    // --- Path 2: Authorization: Bearer <Firebase JWT> via Passport ---
     try {
       return (await this.jwtGuard.canActivate(context)) as boolean;
     } catch {

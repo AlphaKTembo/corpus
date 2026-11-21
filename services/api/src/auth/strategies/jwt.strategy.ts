@@ -5,62 +5,71 @@ import { ConfigService } from '@nestjs/config';
 import * as jwksRsa from 'jwks-rsa';
 import { UsersService } from '../../users/users.service';
 
-export interface ClerkJwtPayload {
+/**
+ * Verifies Firebase ID tokens via Google's public JWKS.
+ * Only FIREBASE_PROJECT_ID is required — no service-account private key.
+ */
+export interface FirebaseIdTokenPayload {
   sub: string;
+  user_id?: string;
   email?: string;
-  username?: string;
-  email_addresses?: Array<{ email_address: string }>;
+  name?: string;
+  email_verified?: boolean;
+  aud?: string;
+  iss?: string;
   [key: string]: unknown;
 }
 
 @Injectable()
-export class JwtStrategy extends PassportStrategy(Strategy) {
+export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
-    private configService: ConfigService,
-    private usersService: UsersService,
+    configService: ConfigService,
+    private readonly usersService: UsersService,
   ) {
-    const publishableKey = configService.get<string>('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY', '');
+    const projectId =
+      configService.get<string>('FIREBASE_PROJECT_ID', '') ||
+      configService.get<string>('NEXT_PUBLIC_FIREBASE_PROJECT_ID', '');
 
-    // Derive Clerk JWKS URI from publishable key
-    // Format: pk_test_BASE64(domain)$ — decode base64, strip trailing $
-    let jwksUri = 'https://api.clerk.dev/v1/jwks';
-    if (publishableKey) {
-      try {
-        const base64Part = publishableKey.replace(/^pk_(test|live)_/, '');
-        const domain = Buffer.from(base64Part, 'base64').toString('utf8').replace(/\$$/, '');
-        if (domain) {
-          jwksUri = `https://${domain}/.well-known/jwks.json`;
-        }
-      } catch {
-        // fallback to default
-      }
-    }
-
-    super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      ignoreExpiration: false,
-      secretOrKeyProvider: jwksRsa.passportJwtSecret({
-        cache: true,
-        rateLimit: true,
-        jwksRequestsPerMinute: 10,
-        jwksUri,
-      }),
-      algorithms: ['RS256'],
-    });
+    super(
+      projectId
+        ? {
+            jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+            ignoreExpiration: false,
+            audience: projectId,
+            issuer: `https://securetoken.google.com/${projectId}`,
+            algorithms: ['RS256'],
+            secretOrKeyProvider: jwksRsa.passportJwtSecret({
+              cache: true,
+              rateLimit: true,
+              jwksRequestsPerMinute: 10,
+              jwksUri:
+                'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com',
+            }),
+          }
+        : {
+            jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+            ignoreExpiration: false,
+            secretOrKey: 'firebase-project-id-missing',
+            algorithms: ['HS256'],
+          },
+    );
   }
 
-  async validate(payload: ClerkJwtPayload): Promise<{ id: string; email: string; username: string }> {
-    if (!payload?.sub) throw new UnauthorizedException('Invalid token');
+  async validate(
+    payload: FirebaseIdTokenPayload,
+  ): Promise<{ id: string; email: string; username: string }> {
+    const uid = payload?.sub || payload?.user_id;
+    if (!uid) {
+      throw new UnauthorizedException('Invalid token');
+    }
 
-    const email =
-      (payload.email as string) ??
-      payload.email_addresses?.[0]?.email_address ??
-      '';
-    const username = (payload.username as string) ?? email.split('@')[0] ?? payload.sub;
+    const email = (payload.email || '').toString();
+    const username =
+      (payload.name as string | undefined)?.toString() ||
+      (email ? email.split('@')[0] : '') ||
+      uid;
 
-    // Provision or retrieve the internal user record mapped to this Clerk ID
-    const user = await this.usersService.findOrCreateByClerkId(payload.sub, email, username);
-
+    const user = await this.usersService.findOrCreateByFirebaseUid(uid, email, username);
     return { id: user.id, email: user.email, username: user.username };
   }
 }

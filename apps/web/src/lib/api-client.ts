@@ -10,10 +10,10 @@ class ApiClient {
   private resolveTokenGetterReady!: () => void;
 
   constructor() {
-    // Resolves when setTokenGetter() is first called (i.e. Clerk is mounted)
+    // Resolves when setTokenGetter() is first called (i.e. Firebase auth is mounted)
     this.tokenGetterReady = new Promise((resolve) => {
       this.resolveTokenGetterReady = resolve;
-      // Auto-resolve after 2s so non-Clerk flows don't hang forever
+      // Auto-resolve after 2s so public flows don't hang forever
       setTimeout(resolve, 2000);
     });
 
@@ -24,7 +24,7 @@ class ApiClient {
       },
     });
 
-    // Wait for Clerk to mount, then attach token
+    // Wait for Firebase auth to mount, then attach token
     this.client.interceptors.request.use(async (config) => {
       await this.tokenGetterReady;
       const token = this.tokenGetter ? await this.tokenGetter() : null;
@@ -35,8 +35,6 @@ class ApiClient {
       return config;
     });
 
-    // On 401, let Clerk middleware handle the redirect — don't force it here
-    // (avoids reload loops when token is momentarily unavailable during hydration)
     this.client.interceptors.response.use(
       (res) => res,
       async (error) => {
@@ -45,7 +43,7 @@ class ApiClient {
     );
   }
 
-  /** Called by ClerkTokenProvider once Clerk is ready */
+  /** Called by FirebaseTokenProvider once auth is ready */
   setTokenGetter(getter: () => Promise<string | null>) {
     this.tokenGetter = getter;
     this.resolveTokenGetterReady();
@@ -56,7 +54,6 @@ class ApiClient {
     return this.tokenGetter ? this.tokenGetter() : null;
   }
 
-  /** @deprecated use Clerk sign-out instead */
   logout() {
     this.tokenGetter = null;
   }
@@ -261,6 +258,7 @@ class ApiClient {
     days?: number;
     activityLimit?: number;
     includeContext?: boolean;
+    timeZone?: string;
   }) {
     return this.client.post('/v1/ask', payload);
   }
@@ -363,8 +361,8 @@ class ApiClient {
     return this.client.put(`/v1/users/me/credentials/intervals/disconnect?clearData=${clearData}`);
   }
 
-  async askCorpus(question: string, options?: { days?: number }) {
-    return this.client.post('/v1/ask', { question, days: options?.days ?? 60 });
+  async askCorpus(question: string, options?: { days?: number; timeZone?: string }) {
+    return this.client.post('/v1/ask', { question, days: options?.days ?? 60, timeZone: options?.timeZone });
   }
 
   async askWithFile(question: string, file: File, mode?: 'fuel-plan-image') {

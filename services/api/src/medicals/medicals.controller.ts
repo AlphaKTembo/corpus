@@ -83,6 +83,25 @@ class MedicalLocalPullDto {
 export class MedicalsController {
   constructor(private medicalsService: MedicalsService) {}
 
+  private isLikelyMobileRequest(req: any): boolean {
+    const clientPlatform = String(req?.headers?.['x-client-platform'] || '').toLowerCase();
+    if (
+      clientPlatform.includes('mobile') ||
+      clientPlatform.includes('android') ||
+      clientPlatform.includes('ios')
+    ) {
+      return true;
+    }
+    const userAgent = String(req?.headers?.['user-agent'] || '').toLowerCase();
+    return (
+      userAgent.includes('dart/') ||
+      userAgent.includes('flutter') ||
+      userAgent.includes('okhttp') ||
+      userAgent.includes('cfnetwork') ||
+      userAgent.includes('mobile')
+    );
+  }
+
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
   async upload(@UploadedFile() file: Express.Multer.File, @Body() dto: MedicalUploadDto, @Request() req: any) {
@@ -263,20 +282,39 @@ export class MedicalsController {
     @Query('maxPerDoc') maxPerDoc?: string,
   ) {
     const userId = req.user?.id;
-    const shouldRefresh = refresh === '1' || refresh === 'true';
+    const isMobileRequest = this.isLikelyMobileRequest(req);
+    let targetDate = date;
+    const requestedRefresh = refresh === '1' || refresh === 'true';
+    let shouldRefresh = requestedRefresh;
     const shouldCompact = compact !== '0' && compact !== 'false';
     const shouldRaw = raw === '1' || raw === 'true';
     const payloadMaxChars = maxChars ? parseInt(maxChars, 10) : undefined;
     const payloadMaxCharsPerDoc = maxPerDoc ? parseInt(maxPerDoc, 10) : undefined;
     const options = { payloadMaxChars, payloadMaxCharsPerDoc };
-    if (date && shouldRefresh) {
-      await this.medicalsService.generateDailySummary(date, options, userId);
+    if (requestedRefresh && isMobileRequest) {
+      const cachedPayloadPath =
+        this.medicalsService.getSummaryPayloadPath(targetDate, userId) ||
+        this.medicalsService.getSummaryPayloadPath(undefined, userId);
+      if (cachedPayloadPath) {
+        // Mobile clients can have strict receive timeouts; serve cached payload fast
+        // and refresh in the background.
+        shouldRefresh = false;
+        void this.medicalsService.generateDailySummary(targetDate, options, userId).catch((err: any) => {
+          console.warn('[MedicalsController] Background summary refresh failed:', err?.message || err);
+        });
+      }
+    }
+    if (shouldRefresh) {
+      // Refresh should regenerate payload even when no date is provided.
+      // In that case the service defaults to today's date and returns it.
+      const generated = await this.medicalsService.generateDailySummary(targetDate, options, userId);
+      targetDate = generated.date;
     }
 
-    let payloadPath = this.medicalsService.getSummaryPayloadPath(date, userId);
-    if (!payloadPath && date) {
-      await this.medicalsService.generateDailySummary(date, options, userId);
-      payloadPath = this.medicalsService.getSummaryPayloadPath(date, userId);
+    let payloadPath = this.medicalsService.getSummaryPayloadPath(targetDate, userId);
+    if (!payloadPath && targetDate) {
+      await this.medicalsService.generateDailySummary(targetDate, options, userId);
+      payloadPath = this.medicalsService.getSummaryPayloadPath(targetDate, userId);
     }
     if (!payloadPath) {
       return res.status(404).json({ error: 'Summary payload not found' });
@@ -289,21 +327,23 @@ export class MedicalsController {
       return res.status(404).json({ error: 'Raw payload not found' });
     }
     if (shouldCompact) {
-      const summaryPath = this.medicalsService.getSummaryJsonPath(date, userId);
+      const summaryPath = this.medicalsService.getSummaryJsonPath(targetDate, userId);
       if (summaryPath) {
         const rawFile = await fs.promises.readFile(summaryPath, 'utf-8');
         const summary = JSON.parse(rawFile);
+        let payloadCreatedAt: string | undefined = undefined;
         let assistantContext: unknown = undefined;
         let csvRecords: unknown = undefined;
         if (payloadPath.endsWith('.json')) {
           const payloadRaw = await fs.promises.readFile(payloadPath, 'utf-8');
           const payloadJson = JSON.parse(payloadRaw);
+          payloadCreatedAt = payloadJson.createdAt;
           assistantContext = payloadJson.assistantContext;
           csvRecords = payloadJson.csvRecords;
         }
         return res.json({
           date: summary.date,
-          createdAt: summary.createdAt,
+          createdAt: payloadCreatedAt || summary.createdAt,
           text: summary.text,
           sourceCount: summary.sourceCount,
           fitnessMetricsIncluded: summary.fitnessMetricsIncluded,

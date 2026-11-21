@@ -570,52 +570,113 @@ export class MedicalsService {
     return { extracted, skipped, retyped };
   }
 
+  private getAnthropicApiKey(): string {
+    const apiKey =
+      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+      this.configService.get<string>('CLAUDE_API_KEY');
+    if (!apiKey) {
+      throw new Error('ANTHROPIC_API_KEY (or CLAUDE_API_KEY) is not configured.');
+    }
+    return apiKey;
+  }
+
+  private getAnthropicModel(): string {
+    return (
+      this.configService.get<string>('ANTHROPIC_MODEL') ||
+      this.configService.get<string>('CLAUDE_MODEL') ||
+      'claude-3-5-sonnet-latest'
+    );
+  }
+
+  private getContextCharLimit(): number {
+    const raw =
+      this.configService.get<string>('ANTHROPIC_MAX_CONTEXT_CHARS') ||
+      this.configService.get<string>('OPENAI_MAX_CONTEXT_CHARS') ||
+      '24000';
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 24000;
+  }
+
+  private getAnthropicMaxTokens(): number {
+    const raw = this.configService.get<string>('ANTHROPIC_MAX_TOKENS', '2400');
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 2400;
+  }
+
+  private getMedicalSummaryMaxTokens(): number {
+    const globalMax = this.getAnthropicMaxTokens();
+    const fallback = Math.min(globalMax, 1800);
+    const raw = this.configService.get<string>('MEDICAL_SUMMARY_MAX_TOKENS', String(fallback));
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, globalMax);
+  }
+
+  private getMedicalSummaryContextCharLimit(): number {
+    const globalMax = this.getContextCharLimit();
+    const fallback = Math.min(globalMax, 30000);
+    const raw = this.configService.get<string>('MEDICAL_SUMMARY_MAX_CONTEXT_CHARS', String(fallback));
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, globalMax);
+  }
+
+  private extractAnthropicText(content: unknown): string {
+    if (!Array.isArray(content)) return '';
+    return content
+      .filter((block) => block && (block as any).type === 'text' && typeof (block as any).text === 'string')
+      .map((block) => (block as any).text.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  private async callAnthropicForText(params: {
+    system: string;
+    user: string;
+    fallback?: string;
+    maxTokens?: number;
+  }): Promise<string> {
+    const maxTokens = params.maxTokens && params.maxTokens > 0
+      ? Math.min(params.maxTokens, this.getAnthropicMaxTokens())
+      : this.getAnthropicMaxTokens();
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': this.getAnthropicApiKey(),
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.getAnthropicModel(),
+        max_tokens: maxTokens,
+        system: params.system,
+        messages: [{ role: 'user', content: params.user }],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Anthropic request failed: ${response.status} ${errorText}`);
+    }
+    const data = await response.json();
+    const text = this.extractAnthropicText((data as any).content);
+    return text || params.fallback || 'No response.';
+  }
+
   async askMedicals(dto: MedicalAskRequest, userId = 'default'): Promise<MedicalAskResponse> {
     const p = this.paths(userId);
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is not configured.');
-    }
-    const model = this.configService.get<string>('OPENAI_MODEL', 'gpt-4o-mini');
-    const maxChars = parseInt(this.configService.get<string>('OPENAI_MAX_CONTEXT_CHARS', '24000'), 10);
+    const maxChars = this.getContextCharLimit();
 
     const documents = this.selectDocumentsForQuestion(dto, userId);
     const csvContext = this.buildCsvContext(maxChars, p);
     const documentContext = this.buildContextFromDocuments(documents, maxChars);
     const context = csvContext || documentContext;
 
-    const payload = {
-      model,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a medical insights assistant. Use only the provided documents. If information is missing, say so.',
-        },
-        {
-          role: 'user',
-          content: `Question: ${dto.question}\n\nDocuments:\n${context}`,
-        },
-      ],
-      temperature: 0.2,
-    };
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+    const answer = await this.callAnthropicForText({
+      system: 'You are a medical insights assistant. Use only the provided documents. If information is missing, say so.',
+      user: `Question: ${dto.question}\n\nDocuments:\n${context}`,
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
-    }
-
-    const data = await response.json();
-    const answer = data.choices?.[0]?.message?.content?.trim() || 'No response.';
 
     return {
       question: dto.question,
@@ -638,12 +699,7 @@ export class MedicalsService {
     payloadShareUrl: string;
   }> {
     const p = this.paths(userId);
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is not configured.');
-    }
-    const model = this.configService.get<string>('OPENAI_MODEL', 'gpt-4o-mini');
-    const maxChars = parseInt(this.configService.get<string>('OPENAI_MAX_CONTEXT_CHARS', '24000'), 10);
+    const maxChars = this.getMedicalSummaryContextCharLimit();
 
     const documents = this.selectDocumentsForQuestion({ question: 'summary' }, userId);
     const csvContext = this.buildCsvContext(maxChars, p);
@@ -677,105 +733,90 @@ export class MedicalsService {
       coverLetter: coverLetterBody,
     };
 
+    const summarySystemPrompt =
+      'You are a medical insights assistant. Use only the provided documents. If information is missing, say so.';
+    const summaryUserPrompt = [
+        `Task: ${summaryPrompt}`,
+        '',
+        'Output format (use plain text, blank lines between sections):',
+        `Date: ${date} (daily medical summary based on the documents provided)`,
+        '',
+        'Data source note (for context): intervals.icu provides activities, vitals (HRV/RHR), body metrics, and sleep; FitnessSyncer provides blood pressure.',
+        '',
+        'Key updates since the last available labs / logs',
+        '- <bullet list of 2-6 key changes, or "Not available.">',
+        '',
+        'Main abnormal finding: <one sentence summary or "Not available.">',
+        '',
+        'Kidney markers: <one sentence summary or "Not available.">',
+        'Blood pressure: <one sentence summary or "Not available.">',
+        'Recovery markers: <one sentence summary or "Not available.">',
+        '',
+        'Document <doc_id> (<type>; collected <date if known>, reported <date if known>)',
+        '',
+        '<Section title (e.g., Electrolytes / renal function)>',
+        '- <metric: value unit (flag)>',
+        '',
+        '<Repeat document blocks for each relevant document>',
+        '',
+        'Fitness metrics (most recent 30 days; BP from FitnessSyncer, other vitals from intervals.icu)',
+        'Vitals trend',
+        '- <date: key vitals line>',
+        'Sleep trend',
+        '- <date: key sleep line>',
+        'Body metrics',
+        '- <date: key body metrics line>',
+        'Activity load',
+        '- <date: key activity line>',
+        '',
+        'Activity zones (aggregated from activities)',
+        '- Heart rate zones: <zone breakdown or "Not available.">',
+        '- Power zones: <zone breakdown or "Not available.">',
+        '',
+        'Manual inputs',
+        '- Lactate threshold: <date: value unit> or "Not available.">',
+        '',
+        'CK (Creatine Kinase) trend across the provided records',
+        '- <date: value unit (flag)>',
+        '',
+        'Kidney function trend',
+        '- <date: creatinine/eGFR values>',
+        '',
+        'DNA reports (long-term context, not a daily change)',
+        '- <brief highlights or "Not available.">',
+        '',
+        'Missing/blank documents (content not available to summarise)',
+        '- <doc id(s) or "None.">',
+        '',
+        'Follow-ups to consider (based on abnormalities + trends seen here)',
+        '- <action items or "Not available.">',
+        '',
+        'Documents:',
+        context || 'No medical documents available.',
+        '',
+        'Fitness Metrics (intervals.icu vitals/body/sleep/activity; BP from FitnessSyncer; most recent 30 days):',
+        fitnessMetricsBlock || 'No fitness metrics available.',
+        '',
+        'Activity zones (aggregated from activities):',
+        activityZonesBlock || 'No activity zone data available.',
+        '',
+        'Manual inputs (from CSV):',
+        lactateThresholdBlock || 'No manual inputs available.',
+      ].join('\n');
     const payload = {
-      model,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a medical insights assistant. Use only the provided documents. If information is missing, say so.',
-        },
-        {
-          role: 'user',
-          content: [
-            `Task: ${summaryPrompt}`,
-            '',
-            'Output format (use plain text, blank lines between sections):',
-            `Date: ${date} (daily medical summary based on the documents provided)`,
-            '',
-            'Data source note (for context): intervals.icu provides activities, vitals (HRV/RHR), body metrics, and sleep; FitnessSyncer provides blood pressure.',
-            '',
-            'Key updates since the last available labs / logs',
-            '- <bullet list of 2-6 key changes, or "Not available.">',
-            '',
-            'Main abnormal finding: <one sentence summary or "Not available.">',
-            '',
-            'Kidney markers: <one sentence summary or "Not available.">',
-            'Blood pressure: <one sentence summary or "Not available.">',
-            'Recovery markers: <one sentence summary or "Not available.">',
-            '',
-            'Document <doc_id> (<type>; collected <date if known>, reported <date if known>)',
-            '',
-            '<Section title (e.g., Electrolytes / renal function)>',
-            '- <metric: value unit (flag)>',
-            '',
-            '<Repeat document blocks for each relevant document>',
-            '',
-            'Fitness metrics (most recent 30 days; BP from FitnessSyncer, other vitals from intervals.icu)',
-            'Vitals trend',
-            '- <date: key vitals line>',
-            'Sleep trend',
-            '- <date: key sleep line>',
-            'Body metrics',
-            '- <date: key body metrics line>',
-            'Activity load',
-            '- <date: key activity line>',
-            '',
-            'Activity zones (aggregated from activities)',
-            '- Heart rate zones: <zone breakdown or "Not available.">',
-            '- Power zones: <zone breakdown or "Not available.">',
-            '',
-            'Manual inputs',
-            '- Lactate threshold: <date: value unit> or "Not available.">',
-            '',
-            'CK (Creatine Kinase) trend across the provided records',
-            '- <date: value unit (flag)>',
-            '',
-            'Kidney function trend',
-            '- <date: creatinine/eGFR values>',
-            '',
-            'DNA reports (long-term context, not a daily change)',
-            '- <brief highlights or "Not available.">',
-            '',
-            'Missing/blank documents (content not available to summarise)',
-            '- <doc id(s) or "None.">',
-            '',
-            'Follow-ups to consider (based on abnormalities + trends seen here)',
-            '- <action items or "Not available.">',
-            '',
-            'Documents:',
-            context || 'No medical documents available.',
-            '',
-            'Fitness Metrics (intervals.icu vitals/body/sleep/activity; BP from FitnessSyncer; most recent 30 days):',
-            fitnessMetricsBlock || 'No fitness metrics available.',
-            '',
-            'Activity zones (aggregated from activities):',
-            activityZonesBlock || 'No activity zone data available.',
-            '',
-            'Manual inputs (from CSV):',
-            lactateThresholdBlock || 'No manual inputs available.',
-          ].join('\n'),
-        },
-      ],
+      provider: 'anthropic',
+      model: this.getAnthropicModel(),
+      system: summarySystemPrompt,
+      user: summaryUserPrompt,
       temperature: 0.2,
     };
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+    const summaryText = await this.callAnthropicForText({
+      system: summarySystemPrompt,
+      user: summaryUserPrompt,
+      fallback: 'No summary generated.',
+      maxTokens: this.getMedicalSummaryMaxTokens(),
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
-    }
-
-    const data = await response.json();
-    const summaryText = data.choices?.[0]?.message?.content?.trim() || 'No summary generated.';
     const coverLetter = this.buildCoverLetter(date, p);
     const syncStatus = this.getSyncStatus(p);
     const syncStatusBlock = this.buildSyncStatusBlock(syncStatus);

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Put, Request, UseGuards, HttpCode, HttpStatus, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Put, Request, UseGuards, HttpCode, HttpStatus, Query } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UsersService } from './users.service';
 
@@ -6,6 +6,13 @@ import { UsersService } from './users.service';
 @UseGuards(JwtAuthGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Delete('me')
+  @HttpCode(HttpStatus.OK)
+  async deleteMe(@Request() req: any) {
+    const result = await this.usersService.deleteAccount(req.user.id);
+    return { success: true, ...result };
+  }
 
   @Get('me')
   async getMe(@Request() req: any) {

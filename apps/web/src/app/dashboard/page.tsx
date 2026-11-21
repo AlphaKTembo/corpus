@@ -142,7 +142,7 @@ export default function DashboardPage() {
     [bodyMetrics],
   );
   const lastSyncDisplay = React.useMemo(() => {
-    const candidate = ingestStatus?.finishedAtUtc || ingestStatus?.startedAtUtc;
+    const candidate = ingestStatus?.finishedAtUtc || ingestStatus?.startedAtUtc || ingestStatus?.latestDataUpdatedAt;
     if (!candidate) return 'Not synced yet';
     const parsed = new Date(candidate);
     if (Number.isNaN(parsed.getTime())) return 'Not synced yet';

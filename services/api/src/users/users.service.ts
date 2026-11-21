@@ -106,16 +106,18 @@ export class UsersService {
     return this.usersRepo.findOne({ where: { clerkId } });
   }
 
+  async findByFirebaseUid(firebaseUid: string): Promise<User | null> {
+    return this.usersRepo.findOne({ where: { firebaseUid } });
+  }
+
   /**
    * Find an existing user by Clerk ID, or create a new one automatically.
-   * This is called on every authenticated request so new Clerk sign-ups
-   * get a data directory provisioned on first access.
+   * Kept for legacy tokens during migration; prefer findOrCreateByFirebaseUid.
    */
   async findOrCreateByClerkId(clerkId: string, email: string, username: string): Promise<User> {
     let user = await this.findByClerkId(clerkId);
     if (user) return user;
 
-    // Also try to match by email in case user existed before Clerk
     if (email) {
       user = await this.findByEmail(email);
       if (user) {
@@ -124,8 +126,6 @@ export class UsersService {
       }
     }
 
-    // Brand-new Clerk user — provision a record
-    // Prefer provided username, then email prefix, then clerkId as last resort
     const safeUsername = username?.trim() || (email ? email.split('@')[0] : '') || clerkId;
     const uniqueUsername = await this.makeUniqueUsername(safeUsername);
     const newUser = this.usersRepo.create({
@@ -134,6 +134,39 @@ export class UsersService {
       username: uniqueUsername,
       passwordHash: '',
       clerkId,
+    });
+    return this.usersRepo.save(newUser);
+  }
+
+  /**
+   * Find or provision an internal user for a Firebase Auth UID.
+   * Links by email when the account already exists (e.g. prior Clerk users).
+   */
+  async findOrCreateByFirebaseUid(
+    firebaseUid: string,
+    email: string,
+    username: string,
+  ): Promise<User> {
+    let user = await this.findByFirebaseUid(firebaseUid);
+    if (user) return user;
+
+    if (email) {
+      user = await this.findByEmail(email);
+      if (user) {
+        await this.usersRepo.update(user.id, { firebaseUid });
+        return { ...user, firebaseUid };
+      }
+    }
+
+    const safeUsername =
+      username?.trim() || (email ? email.split('@')[0] : '') || firebaseUid;
+    const uniqueUsername = await this.makeUniqueUsername(safeUsername);
+    const newUser = this.usersRepo.create({
+      id: uuidv4(),
+      email: email?.toLowerCase().trim() || `${firebaseUid}@firebase.local`,
+      username: uniqueUsername,
+      passwordHash: '',
+      firebaseUid,
     });
     return this.usersRepo.save(newUser);
   }
@@ -195,6 +228,26 @@ export class UsersService {
     }
 
     return { cleared };
+  }
+
+  async deleteAccount(userId: string): Promise<{ deleted: true; clearedPath: boolean }> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Wipe on-disk corpus data (activities, medicals, canonical CSVs, etc.).
+    let clearedPath = false;
+    const root = path.resolve(this.corpusRoot);
+    const userDir = path.resolve(this.corpusRoot, userId);
+    if (userDir.startsWith(root + path.sep) && fs.existsSync(userDir)) {
+      fs.rmSync(userDir, { recursive: true, force: true });
+      clearedPath = true;
+    }
+
+    // Remove DB row last so a crash mid-wipe still leaves an account that can retry.
+    await this.usersRepo.delete(userId);
+    return { deleted: true, clearedPath };
   }
 
   private async makeUniqueUsername(base: string): Promise<string> {

@@ -10,7 +10,7 @@ Paste this into your GPT’s **Instructions** (or Custom Instructions) so it kno
 
 ```
 Call triggerAssistantSync before answering. This performs a fast sync of intervals.icu + FitnessSyncer BP + medical docs/CSVs.
-Note: by default it does NOT generate the daily medical summary (that step calls OpenAI and can be slow/time out).
+Note: by default it does NOT generate the daily medical summary (that step calls Claude and can be slow/time out).
 ```
 
 **2. Use the `ask` endpoint for the answer:**

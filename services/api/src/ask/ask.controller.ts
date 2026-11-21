@@ -25,6 +25,7 @@ export class AskDto {
   @IsOptional() @IsString() key?: string; // consumed by ApiKeyGuard, ignored here
   @IsOptional() @ValidateNested() @Type(() => AskDateRangeDto) dateRange?: AskDateRangeDto;
   @IsOptional() @IsString() activityId?: string;
+  @IsOptional() @IsString() timeZone?: string;
   @IsOptional() @IsNumber() days?: number;
   @IsOptional() @IsNumber() activityLimit?: number;
   @IsOptional() @IsBoolean() includeContext?: boolean;
@@ -35,12 +36,52 @@ export class AskDto {
 export class AskController {
   constructor(private askService: AskService) {}
 
+  private detectLatencyProfile(req: any): 'default' | 'mobile' {
+    const clientPlatform = String(req?.headers?.['x-client-platform'] || '').toLowerCase();
+    if (
+      clientPlatform.includes('mobile') ||
+      clientPlatform.includes('android') ||
+      clientPlatform.includes('ios')
+    ) {
+      return 'mobile';
+    }
+
+    const userAgent = String(req?.headers?.['user-agent'] || '').toLowerCase();
+    if (
+      userAgent.includes('dart/') ||
+      userAgent.includes('flutter') ||
+      userAgent.includes('okhttp') ||
+      userAgent.includes('cfnetwork') ||
+      userAgent.includes('mobile')
+    ) {
+      return 'mobile';
+    }
+
+    return 'default';
+  }
+
   private rethrowFriendly(err: any): never {
     const msg = String(err?.message || '');
-    if (msg.includes('insufficient_quota') || msg.includes('OpenAI request failed: 429')) {
+    if (
+      msg.includes('insufficient_quota') ||
+      msg.includes('OpenAI request failed: 429') ||
+      msg.includes('Anthropic request failed: 429') ||
+      msg.includes('Ideogram request failed: 429')
+    ) {
       throw new ServiceUnavailableException(
         'AI service is temporarily unavailable due to API quota limits. Please try again shortly.',
       );
+    }
+    if (msg.includes('Anthropic request failed: 404') && msg.toLowerCase().includes('model')) {
+      throw new ServiceUnavailableException(
+        'AI model configuration is unavailable right now. Please try again shortly.',
+      );
+    }
+    if (
+      msg.includes('Audio transcription is unavailable') ||
+      msg.includes('Whisper transcription failed')
+    ) {
+      throw new ServiceUnavailableException(msg);
     }
     if (msg.includes('No file provided') || msg.includes('No question provided')) {
       throw new BadRequestException(msg);
@@ -52,11 +93,14 @@ export class AskController {
   async ask(@Body() dto: AskDto, @Request() req: any) {
     const userId = req.user?.id || 'default';
     const userName: string = req.user?.username || req.user?.email || 'the user';
+    const latencyProfile = this.detectLatencyProfile(req);
     try {
       return this.askService.ask(dto.question, dto.dateRange, dto.activityId, {
         days: dto.days,
         activityLimit: dto.activityLimit,
         includeContext: dto.includeContext,
+        timeZone: dto.timeZone,
+        latencyProfile,
       }, userId, userName);
     } catch (err: any) {
       this.rethrowFriendly(err);

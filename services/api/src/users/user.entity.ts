@@ -26,6 +26,9 @@ export class User {
   @Column({ nullable: true, unique: true })
   clerkId?: string;
 
+  @Column({ nullable: true, unique: true })
+  firebaseUid?: string;
+
   @Column({ nullable: true })
   intervalsApiKey?: string;
 

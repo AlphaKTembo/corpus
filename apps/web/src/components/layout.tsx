@@ -3,15 +3,34 @@
 import { usePathname, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
-import { UserButton, useUser } from '@clerk/nextjs';
+import { useState, useEffect, useCallback } from 'react';
 import logo from '../public/logo.png';
 import { apiClient } from '@/lib/api-client';
+import { useAuth } from './auth-provider';
+
+const toMillis = (value?: string | null): number => {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const latestSyncTimestamp = (...values: Array<string | null | undefined>): string | null => {
+  let latestValue: string | null = null;
+  let latestMs = 0;
+  for (const value of values) {
+    const ms = toMillis(value);
+    if (ms > latestMs) {
+      latestMs = ms;
+      latestValue = value || null;
+    }
+  }
+  return latestValue;
+};
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user } = useUser();
+  const { user, signOut } = useAuth();
   const [isMobile, setIsMobile] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -19,14 +38,39 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
+  const syncLastSyncFromServer = useCallback(async () => {
+    const localSync = localStorage.getItem('corpus_last_sync');
+    try {
+      const statusRes = await apiClient.getIngestStatus();
+      const serverSync = latestSyncTimestamp(
+        statusRes.data?.finishedAtUtc,
+        statusRes.data?.startedAtUtc,
+        statusRes.data?.latestDataUpdatedAt,
+      );
+      const latest = latestSyncTimestamp(serverSync, localSync);
+      if (latest) {
+        localStorage.setItem('corpus_last_sync', latest);
+      } else {
+        localStorage.removeItem('corpus_last_sync');
+      }
+      setLastSync(latest);
+    } catch {
+      setLastSync(localSync);
+    }
+  }, []);
+
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth <= 767);
     };
     
     checkMobile();
-    setLastSync(localStorage.getItem('corpus_last_sync'));
+    void syncLastSyncFromServer();
     window.addEventListener('resize', checkMobile);
+    window.addEventListener('focus', syncLastSyncFromServer);
+    const syncPollId = window.setInterval(() => {
+      void syncLastSyncFromServer();
+    }, 60_000);
 
     // Onboarding redirect: send new users to profile-setup on first visit
     const onboarded = localStorage.getItem('corpus_onboarded');
@@ -42,8 +86,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         .catch(() => {});
     }
 
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
+    return () => {
+      window.removeEventListener('resize', checkMobile);
+      window.removeEventListener('focus', syncLastSyncFromServer);
+      window.clearInterval(syncPollId);
+    };
+  }, [pathname, router, syncLastSyncFromServer]);
 
   useEffect(() => {
     if (isMobile) setMobileDrawerOpen(false);
@@ -76,6 +124,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       const now = new Date().toISOString();
       localStorage.setItem('corpus_last_sync', now);
       setLastSync(now);
+      void syncLastSyncFromServer();
       setSyncMessage(null);
     } catch (error) {
       console.error('Quick sync failed', error);
@@ -249,10 +298,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {!collapsed && user && (
             <div style={{ padding: '0 0.5rem', marginBottom: '1rem' }}>
               <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {user.fullName || user.firstName || user.username || user.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'Welcome'}
+                {user.displayName || user.email?.split('@')[0] || 'Welcome'}
               </div>
               <div style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {user.primaryEmailAddress?.emailAddress || ''}
+                {user.email || ''}
               </div>
             </div>
           )}
@@ -308,7 +357,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         <div style={{ padding: collapsed ? '1rem 0' : '1rem 0.5rem', borderTop: '1px solid #e5e7eb' }}>
           <div style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: collapsed ? 'center' : 'flex-start' }}>
-            <UserButton />
+            <button
+              type="button"
+              onClick={() => void signOut().then(() => router.replace('/sign-in'))}
+              title="Sign out"
+              style={{
+                border: '1px solid #cbd5e1',
+                background: '#fff',
+                color: '#334155',
+                borderRadius: 8,
+                padding: collapsed ? '0.45rem' : '0.45rem 0.7rem',
+                fontSize: 12,
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              {collapsed ? '⎋' : 'Sign out'}
+            </button>
           </div>
           {!collapsed && (
             <>

@@ -173,8 +173,88 @@ function formatMarkdown(text: string): React.ReactNode {
   const lines = text.split('\n');
   const nodes: React.ReactNode[] = [];
   let key = 0;
+  const splitTableRow = (line: string): string[] =>
+    line
+      .trim()
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((cell) => cell.trim());
 
-  for (const line of lines) {
+  const isTableDivider = (line: string): boolean => {
+    const cells = splitTableRow(line);
+    if (cells.length < 2) return false;
+    return cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+  };
+
+  const isPotentialTableRow = (line: string): boolean => splitTableRow(line).length >= 2;
+
+  let idx = 0;
+  while (idx < lines.length) {
+    const line = lines[idx];
+    if (
+      idx + 1 < lines.length &&
+      isPotentialTableRow(line) &&
+      isTableDivider(lines[idx + 1])
+    ) {
+      const headerCells = splitTableRow(line);
+      const bodyRows: string[][] = [];
+      idx += 2;
+      while (idx < lines.length && lines[idx].trim() !== '' && isPotentialTableRow(lines[idx])) {
+        bodyRows.push(splitTableRow(lines[idx]));
+        idx += 1;
+      }
+
+      nodes.push(
+        <div key={key++} style={{ overflowX: 'auto', margin: '0.45rem 0' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: 420 }}>
+            <thead>
+              <tr>
+                {headerCells.map((cell, i) => (
+                  <th
+                    key={i}
+                    style={{
+                      textAlign: 'left',
+                      padding: '0.45rem 0.5rem',
+                      borderBottom: '1px solid #cbd5e1',
+                      color: '#334155',
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {inlineFormat(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, rowIdx) => {
+                const normalized = [...row];
+                while (normalized.length < headerCells.length) normalized.push('');
+                return (
+                  <tr key={rowIdx}>
+                    {normalized.slice(0, headerCells.length).map((cell, colIdx) => (
+                      <td
+                        key={colIdx}
+                        style={{
+                          padding: '0.4rem 0.5rem',
+                          borderBottom: '1px solid #e2e8f0',
+                          verticalAlign: 'top',
+                        }}
+                      >
+                        {inlineFormat(cell)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
+
     if (line.startsWith('### ')) {
       nodes.push(<h3 key={key++} style={{ margin: '0.75rem 0 0.25rem', fontSize: '15px', fontWeight: 700 }}>{line.slice(4)}</h3>);
     } else if (line.startsWith('## ')) {
@@ -193,6 +273,7 @@ function formatMarkdown(text: string): React.ReactNode {
     } else {
       nodes.push(<p key={key++} style={{ margin: '0.2rem 0', lineHeight: 1.6 }}>{inlineFormat(line)}</p>);
     }
+    idx += 1;
   }
   return <>{nodes}</>;
 }
@@ -211,6 +292,26 @@ function inlineFormat(text: string): React.ReactNode {
 }
 
 type VoiceState = 'idle' | 'recording' | 'transcribing';
+
+type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort?: () => void;
+  onresult: ((event: any) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onend: (() => void) | null;
+};
+
+type BrowserSpeechRecognitionCtor = new () => BrowserSpeechRecognition;
+
+function getSpeechRecognitionCtor(): BrowserSpeechRecognitionCtor | null {
+  if (typeof window === 'undefined') return null;
+  const maybeCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  return maybeCtor ?? null;
+}
 
 // ── Waveform visualizer ───────────────────────────────────────────────────────
 function WaveformVisualizer({ analyser }: { analyser: AnalyserNode | null }) {
@@ -371,11 +472,20 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechFinalRef = useRef('');
+  const speechInterimRef = useRef('');
+  const speechErrorRef = useRef<string | null>(null);
+  const speechSupportedRef = useRef(false);
+  const speechEndedResolverRef = useRef<(() => void) | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const mimeTypeRef = useRef<string>('');
   const dragCounterRef = useRef(0);
+
+  const getLiveSpeechTranscript = () =>
+    `${speechFinalRef.current} ${speechInterimRef.current}`.replace(/\s+/g, ' ').trim();
 
   // Initialise per-mode session/history so Fuel planner is isolated from Assistant chat.
   useEffect(() => {
@@ -514,7 +624,35 @@ export default function ChatPage() {
     setRecordSecs(0);
   };
 
+  const waitForSpeechRecognition = async (): Promise<string> => {
+    const existing = getLiveSpeechTranscript();
+    if (existing && !speechRecognitionRef.current) return existing;
+
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        if (!speechRecognitionRef.current) {
+          resolve();
+          return;
+        }
+        speechEndedResolverRef.current = resolve;
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 1800)),
+    ]);
+
+    // Give Chrome a brief moment to flush the last final result after onend.
+    const start = Date.now();
+    while (Date.now() - start < 400) {
+      const text = getLiveSpeechTranscript();
+      if (text) return text;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return getLiveSpeechTranscript();
+  };
+
   const stopRecording = (sendAudio = true) => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    setAnalyser(null);
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       if (!sendAudio) {
         mediaRecorderRef.current.ondataavailable = null;
@@ -522,10 +660,31 @@ export default function ChatPage() {
       }
       mediaRecorderRef.current.stop();
     }
-    teardownAudio();
+
+    if (speechRecognitionRef.current) {
+      if (!sendAudio) {
+        speechRecognitionRef.current.onresult = null;
+        speechRecognitionRef.current.onerror = null;
+        speechRecognitionRef.current.onend = null;
+        speechEndedResolverRef.current = null;
+        try { speechRecognitionRef.current.abort?.(); } catch {
+          try { speechRecognitionRef.current.stop(); } catch {}
+        }
+        speechRecognitionRef.current = null;
+      } else {
+        try { speechRecognitionRef.current.stop(); } catch {}
+      }
+    }
+
+    // Keep the mic stream alive until transcription finishes so the browser
+    // speech engine can finalize the last utterance. Cancel path tears down now.
     if (!sendAudio) {
+      teardownAudio();
       mediaRecorderRef.current = null;
       chunksRef.current = [];
+      speechFinalRef.current = '';
+      speechInterimRef.current = '';
+      speechErrorRef.current = null;
       setVoiceState('idle');
     }
   };
@@ -571,7 +730,8 @@ export default function ChatPage() {
           imageUrl = `data:${mime};base64,${res.data.imageBase64}`;
         }
       } else {
-        const res = await apiClient.askCorpus(question.trim(), { days: 60 });
+        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const res = await apiClient.askCorpus(question.trim(), { days: 60, timeZone });
         answer = res.data?.answer || 'Sorry, I could not generate a response.';
         chart = res.data?.chart ?? undefined;
       }
@@ -657,6 +817,11 @@ export default function ChatPage() {
 
     setVoiceError('');
     chunksRef.current = [];
+    speechFinalRef.current = '';
+    speechInterimRef.current = '';
+    speechErrorRef.current = null;
+    speechSupportedRef.current = false;
+    speechEndedResolverRef.current = null;
 
     let stream: MediaStream;
     try {
@@ -683,6 +848,55 @@ export default function ChatPage() {
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     mediaRecorderRef.current = recorder;
 
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (SpeechRecognitionCtor) {
+      try {
+        const recognition = new SpeechRecognitionCtor();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = navigator.language || 'en-US';
+        recognition.onresult = (event: any) => {
+          let interim = '';
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const result = event.results[i];
+            const transcript = result?.[0]?.transcript || '';
+            if (!transcript) continue;
+            if (result?.isFinal) {
+              speechFinalRef.current = `${speechFinalRef.current} ${transcript}`.replace(/\s+/g, ' ').trim();
+              speechInterimRef.current = '';
+            } else {
+              interim += ` ${transcript}`;
+            }
+          }
+          if (interim.trim()) {
+            speechInterimRef.current = interim.trim();
+          }
+        };
+        recognition.onerror = (event: any) => {
+          const err = event?.error || 'speech-recognition-error';
+          // "aborted" / "no-speech" are common when the user stops quickly.
+          if (err !== 'aborted' && err !== 'no-speech') {
+            speechErrorRef.current = err;
+          }
+          speechEndedResolverRef.current?.();
+          speechEndedResolverRef.current = null;
+        };
+        recognition.onend = () => {
+          if (speechRecognitionRef.current === recognition) {
+            speechRecognitionRef.current = null;
+          }
+          speechEndedResolverRef.current?.();
+          speechEndedResolverRef.current = null;
+        };
+        speechRecognitionRef.current = recognition;
+        speechSupportedRef.current = true;
+        recognition.start();
+      } catch {
+        speechRecognitionRef.current = null;
+        speechSupportedRef.current = false;
+      }
+    }
+
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
 
     recorder.onstop = async () => {
@@ -690,27 +904,51 @@ export default function ChatPage() {
       const mt = mimeTypeRef.current;
       const chunks = chunksRef.current;
       chunksRef.current = [];
-      if (!chunks.length) { setVoiceState('idle'); return; }
 
       setVoiceState('transcribing');
-      const blob = new Blob(chunks, { type: mt || 'audio/webm' });
-      const ext = mt.includes('mp4') ? '.mp4' : mt.includes('ogg') ? '.ogg' : '.webm';
       try {
-        const res = await apiClient.transcribeAudio(blob, `recording${ext}`);
-        const transcript = res.data?.transcript?.trim();
-        if (transcript) {
-          setInput(transcript);
-          setTimeout(() => send(transcript), 80);
-        } else {
-          setVoiceError('No speech detected. Please try speaking a bit louder.');
+        const speechTranscript = await waitForSpeechRecognition();
+        if (speechTranscript) {
+          setInput(speechTranscript);
+          setTimeout(() => send(speechTranscript), 80);
+          return;
         }
-      } catch (err: any) {
-        const msg =
-          err?.response?.data?.message ||
-          err?.message ||
-          'Transcription failed. Please try again.';
-        setVoiceError(msg);
+
+        if (!chunks.length) {
+          const reason = speechErrorRef.current;
+          setVoiceError(
+            reason === 'not-allowed'
+              ? 'Microphone or speech permission denied. Allow access and try again.'
+              : 'No speech detected. Hold the mic a moment longer, speak clearly, then stop.',
+          );
+          return;
+        }
+
+        // Mobile Safari / many apps have no usable on-device STT — use Whisper.
+        const blob = new Blob(chunks, { type: mt || 'audio/webm' });
+        const ext = mt.includes('mp4') ? '.mp4' : mt.includes('ogg') ? '.ogg' : '.webm';
+        try {
+          const res = await apiClient.transcribeAudio(blob, `recording${ext}`);
+          const transcript = res.data?.transcript?.trim();
+          if (transcript) {
+            setInput(transcript);
+            setTimeout(() => send(transcript), 80);
+          } else {
+            setVoiceError('No speech detected. Please try speaking a bit louder.');
+          }
+        } catch (err: any) {
+          const msg =
+            err?.response?.data?.message ||
+            err?.message ||
+            'Transcription failed. Please try again.';
+          setVoiceError(Array.isArray(msg) ? msg.join(' ') : String(msg));
+        }
       } finally {
+        teardownAudio();
+        speechFinalRef.current = '';
+        speechInterimRef.current = '';
+        speechErrorRef.current = null;
+        speechEndedResolverRef.current = null;
         setVoiceState('idle');
       }
     };

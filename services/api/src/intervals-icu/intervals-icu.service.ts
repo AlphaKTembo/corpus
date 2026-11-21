@@ -325,6 +325,12 @@ export class IntervalsIcuService {
     );
   }
 
+  async getAthleteProfile(userApiKey?: string, userAthleteId?: string): Promise<Record<string, any>> {
+    const { apiKey, athleteId } = this.resolveCredentials(userApiKey, userAthleteId);
+    if (!apiKey || !athleteId) throw new Error('No intervals.icu credentials configured.');
+    return this.makeRequest<Record<string, any>>(`/athlete/${athleteId}`, apiKey);
+  }
+
   /**
    * Make authenticated request to intervals.icu API
    */
@@ -1466,10 +1472,12 @@ export class IntervalsIcuService {
    * Get activity streams (time-series data)
    * Note: intervals.icu may not expose streams via API - they might require FIT file download
    */
-  async getActivityStreams(activityId: string) {
+  async getActivityStreams(activityId: string, userApiKey?: string, userAthleteId?: string) {
+    const { apiKey } = this.resolveCredentials(userApiKey, userAthleteId);
+    if (!apiKey) throw new Error('No intervals.icu credentials configured.');
     try {
       // Fetch activity to see available stream types
-      const activity = await this.makeRequest<IntervalsActivity>(`/activity/${activityId}`);
+      const activity = await this.makeRequest<IntervalsActivity>(`/activity/${activityId}`, apiKey);
       
       if (!activity.stream_types || activity.stream_types.length === 0) {
         return {
@@ -1486,7 +1494,8 @@ export class IntervalsIcuService {
       try {
         const streamTypes = activity.stream_types.join(',');
         const streams = await this.makeRequest<Record<string, number[]>>(
-          `/activity/${activityId}/streams/${streamTypes}`
+          `/activity/${activityId}/streams/${streamTypes}`,
+          apiKey,
         );
 
         return {
@@ -1521,9 +1530,11 @@ export class IntervalsIcuService {
   /**
    * Get power curve for a single activity
    */
-  async getActivityPowerCurve(activityId: string) {
+  async getActivityPowerCurve(activityId: string, userApiKey?: string, userAthleteId?: string) {
+    const { apiKey } = this.resolveCredentials(userApiKey, userAthleteId);
+    if (!apiKey) throw new Error('No intervals.icu credentials configured.');
     try {
-      const activity = await this.makeRequest<IntervalsActivity>(`/activity/${activityId}`);
+      const activity = await this.makeRequest<IntervalsActivity>(`/activity/${activityId}`, apiKey);
       
       return {
         activity_id: activityId,

@@ -19,12 +19,15 @@ export class AssistantController {
   @Get('me')
   async getMe(@Request() req: any) {
     const user = await this.usersService.findById(req.user?.id);
-    const isClerkLike = (s: string) => /^user_[A-Za-z0-9]{10,}$/.test(s) || s.endsWith('@clerk.local');
+    const isSynthetic = (s: string) =>
+      /^user_[A-Za-z0-9]{10,}$/.test(s) ||
+      s.endsWith('@clerk.local') ||
+      s.endsWith('@firebase.local');
     const username = user?.username ?? '';
     const email = user?.email ?? '';
     const name =
-      (!isClerkLike(username) && username) ||
-      (!isClerkLike(email) && email.includes('@') && email.split('@')[0]) ||
+      (!isSynthetic(username) && username) ||
+      (!isSynthetic(email) && email.includes('@') && email.split('@')[0]) ||
       'there';
     return { name };
   }
