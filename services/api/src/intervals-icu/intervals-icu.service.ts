@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { intervalsAuthHeader } from './intervals-oauth.service';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -346,7 +347,8 @@ export class IntervalsIcuService {
     try {
       response = await fetch(url, {
         headers: {
-          Authorization: `Basic ${Buffer.from(`API_KEY:${resolvedApiKey}`).toString('base64')}`,
+          // API key (Basic) or OAuth token (Bearer), see intervals-oauth.service.ts
+          Authorization: intervalsAuthHeader(resolvedApiKey ?? ''),
           'Content-Type': 'application/json',
         },
         signal: controller.signal,

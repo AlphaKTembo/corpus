@@ -755,6 +755,9 @@ export class AskService {
     return /\b(chart|graph|plot|visuali[sz]e|visual|trend|timeline|compare)\b/.test(q);
   }
 
+  /** Per-process memo of models that rejected budget-based thinking. */
+  private static readonly modelsWithoutBudgetThinking = new Set<string>();
+
   private shouldRetryWithoutThinking(status: number, errorText: string): boolean {
     if (status !== 400) return false;
     const lower = (errorText || '').toLowerCase();
@@ -941,8 +944,13 @@ export class AskService {
         body: JSON.stringify(requestBody(withThinking, modelName)),
       });
 
+    // Models that rejected `thinking.budget_tokens` (e.g. Opus 4.7+, which only
+    // accept adaptive thinking). Once seen, skip the doomed first request.
+    const wantsThinking = (modelName: string) =>
+      thinkingBudget >= 256 && !AskService.modelsWithoutBudgetThinking.has(modelName);
+
     let activeModel = requestedModel;
-    let response = await runRequest(true, activeModel);
+    let response = await runRequest(wantsThinking(activeModel), activeModel);
 
     if (!response.ok) {
       let errorText = await response.text();
@@ -952,7 +960,7 @@ export class AskService {
         this.shouldRetryWithDefaultModel(response.status, errorText)
       ) {
         activeModel = defaultModel;
-        response = await runRequest(true, activeModel);
+        response = await runRequest(wantsThinking(activeModel), activeModel);
         if (!response.ok) {
           errorText = await response.text();
         } else {
@@ -960,7 +968,8 @@ export class AskService {
         }
       }
 
-      if (thinkingBudget >= 256 && this.shouldRetryWithoutThinking(response.status, errorText)) {
+      if (wantsThinking(activeModel) && this.shouldRetryWithoutThinking(response.status, errorText)) {
+        AskService.modelsWithoutBudgetThinking.add(activeModel);
         response = await runRequest(false, activeModel);
         if (!response.ok) {
           const retryErrorText = await response.text();

@@ -32,6 +32,11 @@ export class UsersController {
     return {
       intervalsConnected: !!(user?.intervalsApiKey && user?.intervalsAthleteId),
       intervalsAthleteId: user?.intervalsAthleteId || null,
+      // "oauth": connected via "Connect with intervals.icu" (no key on the device);
+      // "api_key": the user pasted an intervals.icu API key.
+      intervalsAuthType: user?.intervalsApiKey
+        ? (user.intervalsApiKey.startsWith('oauth:') ? 'oauth' : 'api_key')
+        : null,
       hasApiKey: !!user?.apiKey,
       // Keys are stored hashed; the plaintext is only returned once by
       // POST me/api-key/generate.

@@ -15,4 +15,8 @@ fi
 curl -sS -X POST "http://localhost:3000/v1/assistant/sync" \
   -H "Content-Type: application/json" \
   -H "x-corpus-key: ${ACTIONS_API_KEY}" \
+  -H "x-corpus-system: 1" \
   -d '{"days":90}'
+
+# One line per run, so monitor.sh can check the latest result.
+echo

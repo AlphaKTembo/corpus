@@ -5,6 +5,8 @@ import { join } from 'path';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { User } from './users/user.entity';
+import { UserActivity } from './activity/user-activity.entity';
+import { ActivityModule } from './activity/activity.module';
 import { IngestModule } from './ingest/ingest.module';
 import { SummaryModule } from './summary/summary.module';
 import { ActivitiesModule } from './activities/activities.module';
@@ -35,7 +37,7 @@ import { AppController } from './app.controller';
       useFactory: (configService: ConfigService) => ({
         type: 'better-sqlite3',
         database: configService.get<string>('DB_PATH', '/data/corpus/corpus.db'),
-        entities: [User],
+        entities: [User, UserActivity],
         synchronize: true, // auto-creates tables; safe for SQLite
         logging: false,
       }),
@@ -53,6 +55,7 @@ import { AppController } from './app.controller';
     MedicalsModule,
     AssistantModule,
     IntervalsIcuModule,
+    ActivityModule,
   ],
 })
 export class AppModule {}

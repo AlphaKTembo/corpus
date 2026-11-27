@@ -210,7 +210,26 @@ export class UsersService implements OnModuleInit {
   }
 
   async clearIntervalsCredentials(userId: string): Promise<void> {
-    await this.usersRepo.update(userId, { intervalsApiKey: undefined, intervalsAthleteId: undefined });
+    // Revoke OAuth tokens at intervals.icu too (best effort); API keys are
+    // managed by the user on intervals.icu and can't be revoked from here.
+    const user = await this.findById(userId);
+    const stored = user?.intervalsApiKey;
+    if (stored?.startsWith('oauth:')) {
+      try {
+        await fetch('https://intervals.icu/api/v1/disconnect-app', {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${stored.slice('oauth:'.length)}` },
+        });
+      } catch (err) {
+        this.logger.warn(`intervals.icu token revoke failed: ${(err as Error).message}`);
+      }
+    }
+    // null, not undefined: TypeORM skips undefined fields in update(), which
+    // previously left the credentials in place after "disconnect".
+    await this.usersRepo.update(userId, {
+      intervalsApiKey: null,
+      intervalsAthleteId: null,
+    } as unknown as Partial<User>);
   }
 
   /**
